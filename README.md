@@ -301,8 +301,6 @@ API token. `flock` prevents overlapping runs on a single host; use a
 distributed lock for multiple replicas.
 
 ```cron
-VENV=/home/tayyab-saeed/PycharmProjects/football/.venv/bin/python
-APP=/home/tayyab-saeed/PycharmProjects/football
 
 */2 * * * * cd "$APP" && flock -n /tmp/fotmob_live.lock "$VENV" manage.py sync_fotmob_live >> logs/live.log 2>&1
 */15 * * * * cd "$APP" && flock -n /tmp/fotmob_fixtures.lock "$VENV" manage.py sync_fotmob_fixtures --past-days 1 --future-days 3 >> logs/fixtures.log 2>&1
