@@ -1,0 +1,3008 @@
+{
+  "info": {
+    "_postman_id": "8f3c1d42-6b57-4e9a-9c21-7a4f0d5e1b90",
+    "name": "Football Data Platform API",
+    "description": "FotMob-backed Django REST API.\n\nEvery route is served from the local database: no request triggers an upstream FotMob fetch.\n\n## Getting started\n\nThere is no login or registration flow in this collection. The API runs with one fixed user and one long-lived token.\n\n1. On the server, read the token:\n\n       manage.py create_api_token\n\n2. Paste it into the `token` variable (it is pre-filled for the local dev user). Collection-level auth then sends `Authorization: Token {{token}}` on every request.\n3. Set `base_url` (default `http://localhost:8000`). `base_url` and `token` are the only variables.\n4. Run **Token check > Verify token (me)** to confirm it works.\n\nEvery other value - match, league, team, season, player and run IDs, dates and request bodies - is written literally into that request's path, query string or body, so each request is self-contained and editable where you read it. The IDs default to the sample FA Cup fixture (match `6469292`, league `953430`, team `674304`); if your database holds different data, run **Matches > List matches** and copy an ID from its results.\n\n## Roles\n\nThe single token is minted with the `admin` role, so every endpoint in this collection is permitted, including the staff-only internal routes and the administrator-only overrides. Requests are still labelled `(staff)` or `(admin)` so the required privilege is visible if narrower tokens are issued later:\n\n| Role | Can |\n| --- | --- |\n| reader | GET only |\n| staff | + manual matches, allowed-field edits, soft delete, internal reads |\n| admin | + overrides |\n\nMint a narrower one with `manage.py create_api_token --username reader --role reader`.\n\n## Conventions\n\n- Lists return `{count, next, previous, results}`; `page_size` defaults to 50 and is capped at 200.\n- Errors return `{code, message, details, request_id}`.\n- Coverage features return `{available, state, fetched_at, source_coverage_level, entry_count, data}`; `state` is one of `not_fetched`, `available`, `empty`, `unavailable`, `failed`.\n- Unknown scores are `null`, never `0`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "Authorization",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "Token {{token}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Applies to every request in the collection.",
+          "pm.test('Response is JSON or empty', function () {",
+          "    if (pm.response.code === 204) { return; }",
+          "    pm.expect(pm.response.headers.get('Content-Type') || '').to.include('json');",
+          "});",
+          "",
+          "pm.test('No server error', function () {",
+          "    pm.expect(pm.response.code).to.be.below(500);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "Scheme and host only, no trailing slash."
+    },
+    {
+      "key": "token",
+      "value": "a4c7c26bdfd821aae3c39a3304676acb4e338384",
+      "type": "string",
+      "description": "Token for the single API user, from `manage.py create_api_token`. Sent as 'Authorization: Token {{token}}' on every request."
+    }
+  ],
+  "item": [
+    {
+      "name": "Token check",
+      "description": "No login flow is in use: the API runs with one fixed user whose token is minted on the server with `manage.py create_api_token` and pasted into the `token` variable. This request confirms the token works.\n\n`/api/auth/token/`, `/api/auth/logout/` and `/api/auth/token/rotate/` still exist server-side for when per-user login is switched back on; they are left out of this collection on purpose.",
+      "item": [
+        {
+          "name": "Verify token (me)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Reports roles and allowed actions', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.roles).to.be.an('array');",
+                  "    pm.expect(body.allowed_actions).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me",
+                ""
+              ]
+            },
+            "description": "Confirms the token in the `token` variable is valid and shows which roles and actions it carries. A 401 here means the token is wrong or was rotated; re-run `manage.py create_api_token` to read the current key."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Matches",
+      "description": "Lists, filters, category endpoints and the admin write flow.",
+      "item": [
+        {
+          "name": "List matches",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('Paginated envelope', function () {",
+                  "    ['count', 'next', 'previous', 'results'].forEach(function (key) {",
+                  "        pm.expect(body).to.have.property(key);",
+                  "    });",
+                  "});",
+                  "",
+                  "pm.test('Page size is capped at 200', function () {",
+                  "    pm.expect(body.results.length).to.be.at.most(200);",
+                  "});",
+                  "",
+                  "pm.test('Upcoming matches carry no score', function () {",
+                  "    body.results.filter(function (m) { return m.status === 'upcoming'; })",
+                  "        .forEach(function (m) {",
+                  "            pm.expect(m.home.score, 'home score').to.equal(null);",
+                  "            pm.expect(m.away.score, 'away score').to.equal(null);",
+                  "        });",
+                  "});",
+                  "",
+                  "// The IDs in this collection are literal. If your database holds different",
+                  "// fixtures, copy an id from these results into the detail requests' URLs.",
+                  "if (body.results.length > 0) {",
+                  "    console.log('First match id:', body.results[0].id,",
+                  "                '| league:', body.results[0].league && body.results[0].league.id,",
+                  "                '| home team:', body.results[0].home && body.results[0].home.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/?page=1&page_size=50&ordering=kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "page_size",
+                  "value": "50",
+                  "description": "Max 200."
+                },
+                {
+                  "key": "ordering",
+                  "value": "kickoff_utc",
+                  "description": "kickoff_utc | -kickoff_utc | id | -id | league | -league. Anything else is 400."
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "description": "live | completed | upcoming | cancelled | disrupted",
+                  "disabled": true
+                },
+                {
+                  "key": "status_code",
+                  "value": "AET",
+                  "description": "NS, LIVE, HT, ET, PEN_SHOOTOUT, FT, AET, PEN, WO, AWD, POSTPONED, CANCELLED, ABANDONED, INTERRUPTED",
+                  "disabled": true
+                },
+                {
+                  "key": "date",
+                  "value": "2026-11-09",
+                  "description": "Single UTC day.",
+                  "disabled": true
+                },
+                {
+                  "key": "date_from",
+                  "value": "2026-11-01",
+                  "description": "Range start; range is capped at 90 days.",
+                  "disabled": true
+                },
+                {
+                  "key": "date_to",
+                  "value": "2026-11-30",
+                  "disabled": true
+                },
+                {
+                  "key": "league_id",
+                  "value": "953430",
+                  "description": "Matches the league, provider league or primary league ID.",
+                  "disabled": true
+                },
+                {
+                  "key": "team_id",
+                  "value": "674304",
+                  "description": "Home or away.",
+                  "disabled": true
+                },
+                {
+                  "key": "season_id",
+                  "value": "1",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "arsenal",
+                  "description": "Team or league name, minimum 2 characters.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Filterable, searchable, sortable, paginated list. This request's test script seeds `match_id`, `league_id`, `team_id` and `season_id` from the first result."
+          }
+        },
+        {
+          "name": "Search matches by name",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/?search=arsenal",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "arsenal"
+                }
+              ]
+            },
+            "description": "Name lookup is deliberately a list, not a detail route: names are non-unique, localized and mutable. A single match always needs its FotMob ID. Searches shorter than 2 characters return 400."
+          }
+        },
+        {
+          "name": "Get match by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('Detail shape', function () {",
+                  "    pm.expect(body).to.have.property('id');",
+                  "    pm.expect(body).to.have.property('coverage');",
+                  "    pm.expect(body).to.have.property('data_updated_at');",
+                  "});",
+                  "pm.test('Completed matches record a duration, not a live minute', function () {",
+                  "    if (body.status === 'completed') {",
+                  "        pm.expect(body.duration_minutes, 'duration_minutes').to.be.oneOf([90, 120, null]);",
+                  "        if (body.status_code === 'AET' || body.status_code === 'PEN') {",
+                  "            pm.expect(body.duration_minutes).to.equal(120);",
+                  "        }",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                ""
+              ]
+            },
+            "description": "Single match by FotMob ID, including the coverage availability summary, `completion_reason` (FT / AET / PEN) and `duration_minutes` (90 for FT, 120 for AET and penalties)."
+          }
+        },
+        {
+          "name": "Live matches",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('Reports freshness', function () {",
+                  "    pm.expect(body).to.have.property('stale_projections');",
+                  "    pm.expect(body).to.have.property('generated_at');",
+                  "});",
+                  "pm.test('Only in-progress matches', function () {",
+                  "    body.results.forEach(function (m) { pm.expect(m.status).to.equal('live'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/live/?page_size=25",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "live",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "25"
+                }
+              ]
+            },
+            "description": "LIVE / HT / extra-time / shootout matches. Each row carries a `live` block with the elapsed minute, display minute and an `is_stale` flag; the response also reports how many projections are stale overall."
+          }
+        },
+        {
+          "name": "Completed matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/completed/?ordering=-kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "completed",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "-kickoff_utc"
+                },
+                {
+                  "key": "league_id",
+                  "value": "953430",
+                  "disabled": true
+                },
+                {
+                  "key": "status_code",
+                  "value": "AET",
+                  "description": "Narrow to FT, AET, PEN, WO or AWD.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "FT / AET / after-penalties / walkover / awarded matches, newest first."
+          }
+        },
+        {
+          "name": "Upcoming matches",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('No fabricated scores', function () {",
+                  "    pm.response.json().results.forEach(function (m) {",
+                  "        pm.expect(m.home.score).to.equal(null);",
+                  "        pm.expect(m.away.score).to.equal(null);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/upcoming/?ordering=kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "upcoming",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "kickoff_utc"
+                }
+              ]
+            },
+            "description": "Scheduled fixtures only: live and disrupted matches are excluded, and scores stay `null`."
+          }
+        },
+        {
+          "name": "Cancelled / disrupted matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/cancelled/?ordering=-kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "cancelled",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "-kickoff_utc"
+                },
+                {
+                  "key": "status_code",
+                  "value": "POSTPONED",
+                  "description": "POSTPONED | CANCELLED | ABANDONED | INTERRUPTED",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "The `disrupted` category. The four disruption reasons stay distinct in `status_code`, so filter on it rather than treating them as one bucket."
+          }
+        },
+        {
+          "name": "Matches by date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/by-date/2026-11-09/?timezone=Asia/Karachi",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "by-date",
+                "2026-11-09",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "Asia/Karachi",
+                  "description": "Presentation timezone only; selection is by UTC day. Unknown zones return 400."
+                }
+              ]
+            },
+            "description": "One UTC calendar day (`YYYY-MM-DD`; any other format returns 400). The optional `timezone` is echoed for client-side display and does not shift which day is selected."
+          }
+        },
+        {
+          "name": "Create manual match (staff)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created, or 403 without a staff token', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 403]);",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "    console.log('Created manual match id:', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 9100001,\n  \"source\": \"manual\",\n  \"league\": 1,\n  \"home_team\": 1,\n  \"away_team\": 2,\n  \"kickoff_utc\": \"2026-12-01T18:00:00Z\",\n  \"category\": \"upcoming\",\n  \"status_code\": \"NS\",\n  \"round_name\": \"Friendly\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ]
+            },
+            "description": "Staff-only. `league`, `home_team` and `away_team` are **local primary keys**, not FotMob IDs. `source` must be `manual`: provider-sourced rows are created by ingestion only. An upcoming match may not carry a score. Every write is recorded in the audit log."
+          }
+        },
+        {
+          "name": "Update match, allowed field (staff)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"round_name\": \"First Round Replay\",\n  \"reason\": \"Corrected round label from the competition bulletin.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                ""
+              ]
+            },
+            "description": "Staff-only. Editable fields on a provider-sourced match are the non-provider ones (for example `round_name`). `reason` is stored in the audit trail. PUT behaves the same but expects the full representation."
+          }
+        },
+        {
+          "name": "Replace manual match (PUT, staff)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 9100001,\n  \"source\": \"manual\",\n  \"league\": 1,\n  \"home_team\": 1,\n  \"away_team\": 2,\n  \"kickoff_utc\": \"2026-12-02T19:45:00Z\",\n  \"category\": \"upcoming\",\n  \"status_code\": \"NS\",\n  \"round_name\": \"Friendly (rescheduled)\",\n  \"reason\": \"Venue change confirmed by both clubs.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/9100001/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "9100001",
+                ""
+              ]
+            },
+            "description": "Staff-only full replacement. Aimed at the manually created match: on a FotMob-sourced row a PUT must repeat the provider fields unchanged, because any altered provider value is rejected with 400. Adjust `league`, `home_team` and `away_team` to real local primary keys for your database."
+          }
+        },
+        {
+          "name": "Update match, provider field (expect 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Provider-owned fields are refused', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([400, 403]);",
+                  "});",
+                  "if (pm.response.code === 400) {",
+                  "    pm.test('Names the offending field', function () {",
+                  "        pm.expect(pm.response.json().details).to.have.property('home_score');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"home_score\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                ""
+              ]
+            },
+            "description": "Demonstrates field ownership: scores, teams, kickoff, status and league IDs on a FotMob-sourced match are provider-managed. Corrections go through the override flow instead."
+          }
+        },
+        {
+          "name": "Archive match (soft delete, staff)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204, or 403 without a staff token', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([204, 403]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/9100001/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "9100001",
+                ""
+              ]
+            },
+            "description": "Soft delete: the row is archived (`is_archived`, `archived_at`) and disappears from reads, but is never dropped and the audit trail is kept. Points at the manual match by default so a provider record is not archived by accident."
+          }
+        },
+        {
+          "name": "List match overrides (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/overrides/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "overrides",
+                ""
+              ]
+            },
+            "description": "Approved manual corrections for this match. Administrator token required for the POST; reads need an authenticated user."
+          }
+        },
+        {
+          "name": "Create match override (admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created, or 403 without a superuser token', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([201, 403, 400]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field_name\": \"kickoff_utc\",\n  \"value\": \"2026-11-09T21:00:00Z\",\n  \"reason\": \"Club confirmed a later start time.\",\n  \"priority\": 100\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/overrides/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "overrides",
+                ""
+              ]
+            },
+            "description": "Administrator-only. An active override pins a provider-managed field so scheduled syncs cannot silently revert it. `field_name` must be one of the provider-managed fields; anything else returns 400."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Match coverage",
+      "description": "Per-feature coverage. Each response is an availability envelope, so a successful fetch is never mistaken for rich data.",
+      "item": [
+        {
+          "name": "Coverage summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('Lists every feature with a state', function () {",
+                  "    pm.expect(body).to.have.property('features');",
+                  "    Object.keys(body.features).forEach(function (key) {",
+                  "        pm.expect(body.features[key].state).to.be.oneOf(",
+                  "            ['not_fetched', 'available', 'empty', 'unavailable', 'failed']);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/coverage/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "coverage",
+                ""
+              ]
+            },
+            "description": "Feature availability and per-feature fetch timestamps, plus FotMob's own `source_coverage_level` (xG / ratings / lower). An HTTP 200 on the upstream matchDetails call does not mean lineups, stats or commentary exist, so `state` distinguishes `available`, `empty`, `unavailable`, `failed` and `not_fetched`."
+          }
+        },
+        {
+          "name": "Events timeline",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Availability envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    ['available', 'state', 'fetched_at', 'source_coverage_level', 'entry_count', 'data']",
+                  "        .forEach(function (key) { pm.expect(body).to.have.property(key); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/events/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "events",
+                ""
+              ]
+            },
+            "description": "Chronological event timeline: goals, cards and substitutions with minute, added time and running score."
+          }
+        },
+        {
+          "name": "Goals",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/goals/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "goals",
+                ""
+              ]
+            },
+            "description": "Goal events only, with scorer, assist and minute."
+          }
+        },
+        {
+          "name": "Lineups",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/5868121/lineups/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "5868121",
+                "lineups",
+                ""
+              ]
+            },
+            "description": "Starters, bench, formation, coach and per-player ratings for each side. Ratings come from the source's `performance.rating`; `position` is FotMob's line index rendered as GK / DEF / MID / ATT, and `minutes_played` is taken from the player-stats block.\n\nThis is also what creates the `Player` and squad rows: there is no separate player feed. Lower-coverage fixtures return `state: \"empty\"` with `data: []`, not an error."
+          }
+        },
+        {
+          "name": "Team statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/stats/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "stats",
+                ""
+              ]
+            },
+            "description": "Team and period statistics including xG, as `stat_key` / `raw_value` / `numeric_value` rows per team and period (`all`, `1h`, `2h`, `et`)."
+          }
+        },
+        {
+          "name": "Player statistics",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('Availability envelope', function () {",
+                  "    ['available', 'state', 'entry_count', 'data'].forEach(function (k) {",
+                  "        pm.expect(body).to.have.property(k);",
+                  "    });",
+                  "});",
+                  "if (body.data.length) {",
+                  "    const players = new Set(body.data.map(function (r) { return r.player_name; }));",
+                  "    console.log(body.entry_count, 'stat rows for', players.size, 'players');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/5868121/player-stats/?page_size=100",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "5868121",
+                "player-stats",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "100"
+                },
+                {
+                  "key": "player_id",
+                  "value": "177126",
+                  "description": "Narrow to one FotMob player ID.",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Per-player match statistics from FotMob's `playerStats` block: rating, minutes, saves, passing, duels, xG and the rest, one row per player and stat key. Fractions keep both parts (`accurate_passes` = `23/32`) with the numerator in `numeric_value`.\n\nPoints at LaLiga match 5868121, which has xG-level coverage and 905 stat rows. Only players the source reported stats for appear, so unused substitutes are absent. Empty until **Scrapers > Coverage** has run for the match."
+          }
+        },
+        {
+          "name": "Shotmap",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/shots/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "shots",
+                ""
+              ]
+            },
+            "description": "Shot coordinates, xG, xGOT, situation and outcome. Available on xG-level coverage only."
+          }
+        },
+        {
+          "name": "Momentum",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/momentum/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "momentum",
+                ""
+              ]
+            },
+            "description": "Minute-by-minute momentum points where the source provides them."
+          }
+        },
+        {
+          "name": "Commentary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Availability is not inferred from HTTP success', function () {",
+                  "    const body = pm.response.json();",
+                  "    if (body.available) { pm.expect(body.data.length).to.be.above(0); }",
+                  "    else { pm.expect(body.state).to.be.oneOf(['empty', 'unavailable', 'not_fetched', 'failed']); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/6469292/commentary/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "6469292",
+                "commentary",
+                ""
+              ]
+            },
+            "description": "Live ticker entries. `unavailable` means the source advertised no ticker for this match; `empty` means a ticker responded with metadata only. Commentary is reported as present only when real entries were stored."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leagues",
+      "item": [
+        {
+          "name": "List leagues",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/leagues/?page_size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "50"
+                },
+                {
+                  "key": "search",
+                  "value": "premier",
+                  "description": "Name or country code.",
+                  "disabled": true
+                },
+                {
+                  "key": "country",
+                  "value": "ENG",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Competitions keyed by FotMob league ID. `parent_fotmob_id` carries FotMob's `primaryId` for stage and group leagues."
+          }
+        },
+        {
+          "name": "Get league",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/leagues/953430/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "953430",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "League matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/leagues/953430/matches/?ordering=-kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "953430",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "-kickoff_utc"
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "disabled": true
+                },
+                {
+                  "key": "date_from",
+                  "value": "2026-11-01",
+                  "disabled": true
+                },
+                {
+                  "key": "date_to",
+                  "value": "2026-11-30",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Accepts the same filters as `/api/matches/`. Matches are found by league ID, provider league ID or primary league ID."
+          }
+        },
+        {
+          "name": "League standings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/leagues/953430/standings/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "953430",
+                "standings",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "season_id",
+                  "value": "1",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Standing rows for the league, optionally narrowed to one season. Returns an empty page until a standings ingestion job populates the table. Empty until a standings job populates the table."
+          }
+        },
+        {
+          "name": "Create league (staff)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 999001,\n  \"name\": \"Local Invitational Cup\",\n  \"country_code\": \"ENG\",\n  \"league_type\": \"cup\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leagues/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                ""
+              ]
+            },
+            "description": "Staff-only. `fotmob_id` is required and is treated as the upstream identity; it cannot be re-pointed on a later update."
+          }
+        },
+        {
+          "name": "Update league (staff)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"league_type\": \"cup\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leagues/953430/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "953430",
+                ""
+              ]
+            },
+            "description": "Staff-only. Display metadata is editable; changing `fotmob_id`, `parent_fotmob_id` or `country_code` on an existing row returns 400."
+          }
+        },
+        {
+          "name": "Replace league (PUT, staff)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 999001,\n  \"name\": \"Local Invitational Cup\",\n  \"country_code\": \"ENG\",\n  \"league_type\": \"cup\",\n  \"is_active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/leagues/999001/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "999001",
+                ""
+              ]
+            },
+            "description": "Staff-only full replacement, aimed at the example league created above. `fotmob_id`, `parent_fotmob_id` and `country_code` must be repeated unchanged."
+          }
+        },
+        {
+          "name": "Deactivate league (staff)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/leagues/999001/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "leagues",
+                "999001",
+                ""
+              ]
+            },
+            "description": "Staff-only, and not a row delete: the league is marked `is_active = false` and the change is audited. Points at the example league created above."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Teams",
+      "item": [
+        {
+          "name": "List teams",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/teams/?page_size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "page_size",
+                  "value": "50"
+                },
+                {
+                  "key": "search",
+                  "value": "plymouth",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get team",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/teams/674304/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "674304",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Team matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/teams/674304/matches/?ordering=-kickoff_utc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "674304",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "-kickoff_utc"
+                },
+                {
+                  "key": "status",
+                  "value": "upcoming",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Home and away fixtures for the team, with the usual match filters."
+          }
+        },
+        {
+          "name": "Team players",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/teams/674304/players/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "674304",
+                "players",
+                ""
+              ]
+            },
+            "description": "Active squad links for the team. Populated as lineups are ingested."
+          }
+        },
+        {
+          "name": "Create team (staff)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 999101,\n  \"name\": \"Example FC\",\n  \"short_name\": \"EXA\",\n  \"country_code\": \"ENG\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/teams/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                ""
+              ]
+            },
+            "description": "Staff-only."
+          }
+        },
+        {
+          "name": "Update team (staff)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"short_name\": \"PLY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/teams/674304/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "674304",
+                ""
+              ]
+            },
+            "description": "Staff-only. `fotmob_id` and `country_code` are provider-owned and rejected on update."
+          }
+        },
+        {
+          "name": "Replace team (PUT, staff)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 999101,\n  \"name\": \"Example FC\",\n  \"short_name\": \"EXF\",\n  \"country_code\": \"ENG\",\n  \"logo_url\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/teams/999101/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "999101",
+                ""
+              ]
+            },
+            "description": "Staff-only full replacement, aimed at the example team created above. `fotmob_id` and `country_code` must be repeated unchanged."
+          }
+        },
+        {
+          "name": "Delete team, referenced (expect 409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict while matches reference the team', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([409, 403, 204]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/teams/674304/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "teams",
+                "674304",
+                ""
+              ]
+            },
+            "description": "Staff-only. A team referenced by stored matches cannot be deleted: the API answers 409 with the error envelope rather than cascading. Unreferenced teams delete with 204."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Seasons",
+      "item": [
+        {
+          "name": "List seasons",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/seasons/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "league_id",
+                  "value": "953430",
+                  "description": "FotMob league ID.",
+                  "disabled": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get season",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/seasons/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                "1",
+                ""
+              ]
+            },
+            "description": "Seasons use the local primary key, not a FotMob ID. Seasons are only created when a fixture payload carries a season name, so this returns 404 until one exists."
+          }
+        },
+        {
+          "name": "Season matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/seasons/1/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                "1",
+                "matches",
+                ""
+              ]
+            },
+            "description": " Returns 404 until a season row exists."
+          }
+        },
+        {
+          "name": "Create season (staff)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"league\": 1,\n  \"year_name\": \"2027/2028\",\n  \"is_current\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/seasons/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                ""
+              ]
+            },
+            "description": "Staff-only. `league` is a local primary key. `(league, year_name)` is unique, so a duplicate returns 400."
+          }
+        },
+        {
+          "name": "Update season (staff)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_current\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/seasons/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                "1",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Replace season (PUT, staff)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"league\": 1,\n  \"year_name\": \"2026/2027\",\n  \"is_current\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/seasons/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                "1",
+                ""
+              ]
+            },
+            "description": "Staff-only full replacement. `(league, year_name)` uniqueness is validated, so reusing another season's year for the same league returns 400. Needs an existing season row."
+          }
+        },
+        {
+          "name": "Delete season (staff)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/seasons/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "seasons",
+                "1",
+                ""
+              ]
+            },
+            "description": "Staff-only. A season with stored matches returns 409; detach them first. Needs an existing season row."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Players",
+      "description": "Players are a by-product of coverage ingestion: FotMob has no player list endpoint in this integration, so a `Player` row appears the first time the player shows up in an ingested lineup, match event or player-stats block.\n\nIf these return empty or 404, run **Scrapers (run ingestion) > Coverage** first - for one match, use **Coverage - specific match IDs**. The IDs below are local primary keys, not FotMob IDs.",
+      "item": [
+        {
+          "name": "List players",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/players/?page_size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "players",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "oblak",
+                  "disabled": true
+                },
+                {
+                  "key": "page_size",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Every player stored so far, newest coverage first. Populated by coverage ingestion; `search` matches the name."
+          }
+        },
+        {
+          "name": "Get player",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/players/1/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "players",
+                "1",
+                ""
+              ]
+            },
+            "description": "Local primary key. Players are created from ingested lineups, so this returns 404 until coverage has been synced."
+          }
+        },
+        {
+          "name": "Player matches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/players/1/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "players",
+                "1",
+                "matches",
+                ""
+              ]
+            },
+            "description": "Matches where the player appears in a stored lineup or event. Returns 404 until players exist."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scrapers (run ingestion)",
+      "description": "Runs the two FotMob scrapers through the API instead of the shell. Each request posts to `/api/internal/sync-jobs/`, which hands the job to a background worker and answers **202** immediately - the fetching never happens inside the response, so Postman does not sit waiting for thousands of fixtures.\n\n**How to use a request here**\n\n1. Send it. You get 202 with a `status_url`, or **409** if that same job is already running.\n2. Poll **Latest run for a job** (or **Runs in progress**) until `state` is no longer `running`. The run record then carries the counts, provider request and error totals and the duration.\n3. On a failure, **Latest run errors** lists the categorized errors and the quarantined payloads.\n\n**Every request here is `\"dry_run\": true`.** A dry run fetches from FotMob and classifies everything but writes nothing, which is the safe way to check a window first. Set `\"dry_run\": false` to persist.\n\nScope is bounded server-side: at most 60 past/future days, a 121-day explicit range, 14 days back for live and coverage, 500 matches per coverage run and 50 explicit IDs. One run of a given job at a time.\n\nCron does not use this route - it runs the same jobs as management commands straight against the ORM, with `flock` for locking. This endpoint is the staff-only manual equivalent, and the worker thread is a development convenience, not a production queue.",
+      "item": [
+        {
+          "name": "Fixtures — dry run (past 1, next 3 days)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_fixtures\",\n  \"past_days\": 1,\n  \"future_days\": 3,\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Scraper B (`fotmob_fixtures_scraper`) logic: one request per UTC day, flattening league groups and upserting every match by FotMob ID. This is the 15-minute cron window. Dry run, so nothing is written - compare `created` against `unchanged` in the run record to see what a real run would do."
+          }
+        },
+        {
+          "name": "Fixtures — write (past 1, next 3 days)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_fixtures\",\n  \"past_days\": 1,\n  \"future_days\": 3,\n  \"dry_run\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "The same window, persisting. Idempotent: re-running it produces no duplicates, a null score never overwrites a known one, and a stale snapshot cannot reopen a completed match."
+          }
+        },
+        {
+          "name": "Fixtures — explicit date range",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_fixtures\",\n  \"start_date\": \"2026-11-09\",\n  \"end_date\": \"2026-11-11\",\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Backfill a specific window. `start_date` and `end_date` are inclusive UTC dates and must be given together; the range is capped at 121 days. One upstream request per day, so a wide range takes a while - watch `provider_requests` in the run record."
+          }
+        },
+        {
+          "name": "Fixtures — one league only",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_fixtures\",\n  \"past_days\": 1,\n  \"future_days\": 3,\n  \"league_ids\": [\n    953430\n  ],\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Keeps only the given FotMob league IDs (matched against the league, provider league and primary league ID); everything else counts as `skipped`. Up to 50 IDs."
+          }
+        },
+        {
+          "name": "Live scores — write (today)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_live\",\n  \"days_back\": 0,\n  \"dry_run\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Scraper A's fixture pass: refreshes scores, statuses and the LiveMatch projection for today. This is the 2-minute cron job. `days_back: 1` also re-reads yesterday, which is what cron does. Stale projections are only closed after the provider confirms the match ended."
+          }
+        },
+        {
+          "name": "Coverage — live matches only",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_coverage\",\n  \"details_for\": \"live\",\n  \"days_back\": 1,\n  \"limit\": 20,\n  \"dry_run\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Scraper A's matchDetails pass over in-progress matches: events, lineups, team stats, shots, momentum and the ticker when one is advertised. The 5-minute cron job. An empty or failed feature keeps the last known good data; `coverage_fetched` counts successful calls and `coverage_rich` counts matches that actually had lineups or stats."
+          }
+        },
+        {
+          "name": "Coverage — fill gaps (all prioritized)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_coverage\",\n  \"details_for\": \"all\",\n  \"days_back\": 2,\n  \"limit\": 50,\n  \"dry_run\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "`details_for: \"all\"` also picks up recently completed matches whose coverage is missing or over an hour old. Costs one matchDetails call per match, so keep `limit` modest."
+          }
+        },
+        {
+          "name": "Coverage — specific match IDs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_coverage\",\n  \"match_ids\": [\n    6469292\n  ],\n  \"dry_run\": false,\n  \"store_raw\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Fetches coverage for named FotMob match IDs only - the quickest way to populate one match for testing. Up to 50 IDs. `store_raw: true` also keeps the raw matchDetails payload for replay, in a single bounded row per match."
+          }
+        },
+        {
+          "name": "Coverage — populate players for one match",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    console.log('Poll Latest run for a job, then open Players > List players.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_coverage\",\n  \"match_ids\": [\n    5868121\n  ],\n  \"dry_run\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "**This is how you get player data.** One matchDetails call writes the lineups, per-player stats, squad links and event-to-player links for that match, which is what creates `Player` rows - there is no separate player scraper.\n\nThe example is LaLiga match 5868121 (xG coverage): 46 players, 46 squad links and ~900 stat rows. Swap in any completed match ID from **Matches > Completed matches**; a top-division fixture gives the richest data, while lower-coverage matches may have no lineups at all.\n\nTo populate many matches at once use **Coverage - fill gaps**, which walks recently completed matches whose coverage is missing."
+          }
+        },
+        {
+          "name": "Daily reconcile — dry run (±30 days)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"daily_fixture_reconcile\",\n  \"past_days\": 30,\n  \"future_days\": 30,\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "The off-peak daily job: re-reads a wide window so reschedules, postponements and late corrections land. 61 upstream requests and, on this data, well over 13,000 fixtures, so expect minutes rather than seconds. A fixture that simply was not observed is never deleted or cancelled."
+          }
+        },
+        {
+          "name": "Weekly backfill — dry run",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 409]);",
+                  "});",
+                  "if (pm.response.code === 202) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Dispatched, not run inline', function () {",
+                  "        pm.expect(body.accepted).to.be.true;",
+                  "        pm.expect(body).to.have.property('worker');",
+                  "        pm.expect(body).to.have.property('status_url');",
+                  "    });",
+                  "    console.log('Started', body.job, '| dry_run:', body.dry_run,",
+                  "                '| poll:', body.status_url);",
+                  "} else {",
+                  "    console.log('That job is already running. Poll the run list, then retry.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"weekly_backfill\",\n  \"past_days\": 7,\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "Rate-limited historical top-up for older gaps. The CLI version (`manage.py weekly_backfill`) works backwards from the oldest stored fixture in batches; over the API it runs one bounded window."
+          }
+        },
+        {
+          "name": "Latest run for a job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-runs/?job=sync_fotmob_fixtures&page_size=5",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-runs",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "job",
+                  "value": "sync_fotmob_fixtures"
+                },
+                {
+                  "key": "page_size",
+                  "value": "5"
+                },
+                {
+                  "key": "state",
+                  "value": "running",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Newest first, so `results[0]` is the run you just started. Poll this until `state` leaves `running`: it then reads `success`, `partial` or `failed`, with `counts`, `provider_requests`, `provider_errors` and `duration_seconds`. Change the `job` value to follow a different scraper."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+                  "const rows = pm.response.json().results;",
+                  "if (rows.length) {",
+                  "    const run = rows[0];",
+                  "    console.log(run.job, '->', run.state,",
+                  "                '| counts:', JSON.stringify(run.counts),",
+                  "                '| provider requests:', run.provider_requests,",
+                  "                '| errors:', run.error_count);",
+                  "    pm.test('Run is finished', function () {",
+                  "        pm.expect(run.state, 'still running - poll again').to.not.equal('running');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Runs in progress",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-runs/?state=running",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-runs",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "state",
+                  "value": "running"
+                }
+              ]
+            },
+            "description": "Which jobs are working right now. A job listed here returns 409 if you trigger it again. A row stuck here after a crashed process stops blocking new runs after two hours."
+          }
+        },
+        {
+          "name": "Latest run errors",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-runs/2/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-runs",
+                "2",
+                ""
+              ],
+              "query": []
+            },
+            "description": "One run with its categorized errors (`http`, `parse`, `validation`, `database`) and quarantined payloads, which can be replayed without re-scraping upstream. Replace the ID with the one from **Latest run for a job**."
+          }
+        },
+        {
+          "name": "Ingestion health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/health/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "health",
+                ""
+              ],
+              "query": []
+            },
+            "description": "Per-job last run, last success and last counts, plus stale live projections and stored match totals by category. The one request to check after a batch of scraper runs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal (staff only)",
+      "description": "Ingestion observability. Staff token required even for reads; throttled at 30/min.",
+      "item": [
+        {
+          "name": "List sync runs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 for staff, 403 for a reader token', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 403]);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "    const body = pm.response.json();",
+                  "    pm.test('Includes per-job health', function () {",
+                  "        pm.expect(body).to.have.property('health');",
+                  "    });",
+                  "    if (body.results.length > 0) {",
+                  "        console.log('Newest run id:', body.results[0].id, '| state:', body.results[0].state);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-runs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-runs",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "job",
+                  "value": "sync_fotmob_fixtures",
+                  "description": "sync_fotmob_fixtures | sync_fotmob_live | sync_fotmob_coverage | daily_fixture_reconcile | weekly_backfill",
+                  "disabled": true
+                },
+                {
+                  "key": "state",
+                  "value": "success",
+                  "description": "running | success | partial | failed",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Job history with created/updated/unchanged/skipped/invalid/partial counters, provider request and error totals, duration and dry-run flag. The `health` block reports last run, last success and last counts per job. This request stores the newest run's ID in `run_id`."
+          }
+        },
+        {
+          "name": "Get sync run",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-runs/2/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-runs",
+                "2",
+                ""
+              ]
+            },
+            "description": "One run with its error rows, including quarantined payloads that can be replayed without re-scraping upstream."
+          }
+        },
+        {
+          "name": "Ingestion health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/internal/health/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "health",
+                ""
+              ]
+            },
+            "description": "Per-job last success and last error, stale live projection count, and stored match totals by category. Use this for alerting on stale live data."
+          }
+        },
+        {
+          "name": "Trigger sync job (generic form)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted for staff', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([202, 403]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job\": \"sync_fotmob_live\",\n  \"past_days\": 1,\n  \"future_days\": 3,\n  \"limit\": 50,\n  \"dry_run\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/internal/sync-jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "internal",
+                "sync-jobs",
+                ""
+              ]
+            },
+            "description": "The raw trigger. Hands the job to a background worker and answers 202, or 409 when that job is already running. Accepts `job`, `dry_run`, `past_days`, `future_days`, `start_date`, `end_date`, `days_back`, `details_for`, `match_ids`, `league_ids`, `limit` and `store_raw`, all bounded server-side.\n\nThe **Scrapers (run ingestion)** folder has ready bodies for each job; this request is here to edit freely."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Error cases",
+      "description": "Every failure uses `{code, message, details, request_id}`. Run these to verify auth, validation and not-found behaviour.",
+      "item": [
+        {
+          "name": "Missing token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error envelope', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.code).to.equal('authentication_required');",
+                  "    ['message', 'details', 'request_id'].forEach(function (key) {",
+                  "        pm.expect(body).to.have.property(key);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ]
+            },
+            "description": "No credentials at all: token authentication is required on every route except token issuance."
+          }
+        },
+        {
+          "name": "Invalid token (401)",
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "Authorization",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "Token not-a-real-token",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Write permission check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 for a reader token, 201 or 400 for an admin token', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([403, 400, 201]);",
+                  "});",
+                  "if (pm.response.code === 403) {",
+                  "    pm.test('Distinguished from 401', function () {",
+                  "        pm.expect(pm.response.json().code).to.equal('permission_denied');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fotmob_id\": 999999,\n  \"source\": \"manual\",\n  \"league\": 1,\n  \"home_team\": 1,\n  \"away_team\": 2,\n  \"category\": \"upcoming\",\n  \"status_code\": \"NS\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/matches/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ]
+            },
+            "description": "A valid token proves identity, not edit authority. With the single admin-role token this write is allowed, so expect 201 (or 400 if `league` / `home_team` / `away_team` are not real local primary keys). Mint a reader-role token with `manage.py create_api_token --username reader --role reader` to see the 403 path instead."
+          }
+        },
+        {
+          "name": "Unknown match (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', function () { pm.response.to.have.status(404); });",
+                  "pm.test('code is not_found', function () {",
+                  "    pm.expect(pm.response.json().code).to.equal('not_found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/999999999/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "999999999",
+                ""
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invalid ordering field (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Validation details name the parameter', function () {",
+                  "    pm.expect(pm.response.json().details).to.have.property('ordering');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/?ordering=home_team__name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "ordering",
+                  "value": "home_team__name"
+                }
+              ]
+            },
+            "description": "Ordering is restricted to a whitelist; arbitrary ORM field names are never accepted."
+          }
+        },
+        {
+          "name": "Reversed date range (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/?date_from=2026-11-20&date_to=2026-11-01",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "date_from",
+                  "value": "2026-11-20"
+                },
+                {
+                  "key": "date_to",
+                  "value": "2026-11-01"
+                }
+              ]
+            },
+            "description": "`date_to` must be on or after `date_from`, and the span is capped at 90 days."
+          }
+        },
+        {
+          "name": "Date range over 90 days (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/?date_from=2020-01-01&date_to=2026-01-01",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "date_from",
+                  "value": "2020-01-01"
+                },
+                {
+                  "key": "date_to",
+                  "value": "2026-01-01"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Bad date format (400)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/matches/by-date/09-11-2026/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "matches",
+                "by-date",
+                "09-11-2026",
+                ""
+              ]
+            },
+            "description": "The by-date path segment must be `YYYY-MM-DD`."
+          }
+        }
+      ]
+    }
+  ]
+}
